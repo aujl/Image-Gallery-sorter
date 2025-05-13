@@ -1,0 +1,980 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced Local Photo Labeler & Filter</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
+    <style>
+        body {
+            font-family: "Inter", sans-serif;
+            background-color: #f3f4f6;
+            padding: 20px;
+        }
+        .container {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+            max-width: 1200px; /* Wider container */
+            margin: 20px auto;
+        }
+        .file-input-label, .button {
+            display: inline-block;
+            background-color: #4f46e5; /* Indigo */
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            border: none;
+            font-size: 1rem;
+            text-align: center;
+            text-decoration: none;
+        }
+         .button.secondary {
+             background-color: #6b7280; /* Gray */
+         }
+         .button.secondary:hover {
+             background-color: #4b5563; /* Darker gray */
+         }
+         .button:disabled {
+             background-color: #d1d5db; /* Light gray */
+             cursor: not-allowed;
+         }
+
+        .file-input-label:hover, .button:hover:not(:disabled) {
+            background-color: #4338ca; /* Darker indigo */
+        }
+        #file-upload {
+            display: none;
+        }
+        .gallery {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); /* Slightly larger grid items */
+            gap: 15px;
+            margin-top: 30px;
+        }
+        .gallery-item {
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            overflow: hidden;
+            background-color: #ffffff;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+            display: flex;
+            flex-direction: column;
+            cursor: pointer;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        .gallery-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        }
+        .gallery-item img {
+            width: 100%;
+            height: 180px; /* Fixed height for images */
+            object-fit: cover;
+        }
+        .image-info {
+            padding: 10px;
+            text-align: left;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        .image-info .file-name {
+            font-size: 0.9em;
+            color: #4b5563;
+            margin-bottom: 5px;
+            word-break: break-all;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis; /* Truncate long names */
+        }
+        .image-labels {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            min-height: 20px;
+        }
+        .image-label {
+            background-color: #e0e7ff;
+            color: #4338ca;
+            font-size: 0.7em;
+            padding: 3px 8px;
+            border-radius: 9999px;
+        }
+        .label-management, .filter-area, .suggestion-area {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e5e7eb;
+        }
+        .label-input-area {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+            align-items: center;
+        }
+        .label-input-area input[type="text"] {
+            flex-grow: 1;
+            padding: 8px 12px;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            font-size: 1rem;
+        }
+        .available-labels, .filter-labels, .suggested-labels {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 15px;
+            min-height: 30px;
+        }
+        .available-label, .filter-label, .suggested-label {
+             font-size: 0.8em;
+             padding: 5px 10px;
+             border-radius: 9999px;
+             cursor: pointer;
+             transition: background-color 0.2s ease;
+             display: flex;
+             align-items: center;
+             gap: 5px;
+        }
+        .available-label {
+             background-color: #d1fae5; /* Light green */
+             color: #065f46; /* Dark green */
+        }
+        .available-label:hover {
+            background-color: #a7f3d0; /* Lighter green on hover */
+        }
+         .available-label .remove-label {
+             font-size: 1em;
+             font-weight: bold;
+             color: #b91c1c; /* Red for remove */
+             cursor: pointer;
+             margin-left: 5px;
+         }
+
+        .filter-label {
+            background-color: #fee2e2; /* Light red */
+            color: #991b1b; /* Dark red */
+        }
+        .filter-label:hover {
+            background-color: #fecaca; /* Lighter red on hover */
+        }
+        .filter-label.active {
+            background-color: #ef4444; /* Red */
+            color: white;
+        }
+         .suggested-label {
+             background-color: #bfdbfe; /* Light blue */
+             color: #1e40af; /* Dark blue */
+         }
+         .suggested-label:hover {
+             background-color: #93c5fd; /* Lighter blue */
+         }
+         .suggested-label .accept-suggestion {
+              font-size: 1em;
+              font-weight: bold;
+              color: #065f46; /* Green for accept */
+              cursor: pointer;
+              margin-left: 5px;
+         }
+         .suggested-label .edit-suggestion {
+              font-size: 1em;
+              font-weight: bold;
+              color: #f59e0b; /* Yellow for edit */
+              cursor: pointer;
+              margin-left: 5px;
+         }
+         .suggested-label .discard-suggestion {
+              font-size: 1em;
+              font-weight: bold;
+              color: #b91c1c; /* Red for discard */
+              cursor: pointer;
+              margin-left: 5px;
+         }
+
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background-color: #ffffff;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 700px; /* Wider modal */
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            position: relative;
+        }
+        .modal-content img {
+            max-width: 100%;
+            max-height: 400px;
+            display: block;
+            margin: 0 auto 20px auto;
+            border-radius: 8px;
+            object-fit: contain;
+        }
+         .modal-content h3 {
+             font-size: 1.5em;
+             margin-bottom: 15px;
+             text-align: center;
+             color: #374151;
+         }
+        .modal-labels {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 20px;
+            justify-content: center;
+        }
+        .modal-label {
+             background-color: #e0e7ff;
+             color: #4338ca;
+             font-size: 0.9em;
+             padding: 5px 10px;
+             border-radius: 9999px;
+             cursor: pointer;
+             transition: background-color 0.2s ease;
+        }
+         .modal-label:hover {
+             background-color: #c7d2fe;
+         }
+        .modal-label.selected {
+            background-color: #4f46e5;
+            color: white;
+        }
+        .close-button {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            font-size: 1.5em;
+            cursor: pointer;
+            color: #6b7280;
+        }
+         .status-message {
+             margin-top: 15px;
+             font-style: italic;
+             color: #4b5563;
+         }
+         .progress-bar-container {
+             width: 100%;
+             background-color: #e5e7eb;
+             border-radius: 8px;
+             margin-top: 15px;
+             overflow: hidden;
+         }
+         .progress-bar {
+             height: 20px;
+             background-color: #4f46e5;
+             width: 0%;
+             text-align: center;
+             line-height: 20px;
+             color: white;
+             font-size: 0.8em;
+             transition: width 0.3s ease;
+         }
+
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">Advanced Local Photo Labeler & Filter</h1>
+        <p class="text-gray-600 mb-6">Select photos from your computer to label and filter them locally. Labels and assignments are saved in your browser.</p>
+
+        <input type="file" id="file-upload" accept="image/*" multiple>
+        <label for="file-upload" class="file-input-label">Select Photos</label>
+        <span id="file-count" class="text-gray-600 ml-4">0 photos selected</span>
+
+
+        <div class="label-management">
+            <h2 class="text-xl font-semibold text-gray-700 mb-4">Manage Custom Labels</h2>
+            <div class="label-input-area">
+                <input type="text" id="new-label-input" placeholder="Enter new label name">
+                <button id="add-label-button" class="button">Add Label</button>
+            </div>
+            <div id="available-labels" class="available-labels">
+                </div>
+        </div>
+
+         <div class="suggestion-area">
+             <h2 class="text-xl font-semibold text-gray-700 mb-4">Suggest Labels from Subset</h2>
+             <p class="text-gray-600 mb-4">Use a small random sample of photos to suggest initial labels based on a pre-trained model.</p>
+             <button id="suggest-labels-button" class="button secondary" disabled>Suggest Labels (requires photos)</button>
+             <div id="suggested-labels" class="suggested-labels mt-4">
+                 </div>
+             <p id="suggestion-status" class="status-message"></p>
+         </div>
+
+        <div class="filter-area">
+             <h2 class="text-xl font-semibold text-gray-700 mb-4">Filter by Labels</h2>
+             <button id="clear-filters-button" class="button secondary text-sm py-1 px-3 mb-2">Clear Filters</button>
+             <div id="filter-labels" class="filter-labels">
+                 </div>
+        </div>
+
+         <div class="bulk-labeling-area">
+              <h2 class="text-xl font-semibold text-gray-700 mb-4">Apply Labels to All Photos</h2>
+              <p class="text-gray-600 mb-4">Automatically assign your custom labels to all photos based on model classification.</p>
+              <button id="apply-labels-button" class="button" disabled>Apply Labels (requires photos & labels)</button>
+              <p id="bulk-labeling-status" class="status-message"></p>
+              <div id="bulk-labeling-progress-container" class="progress-bar-container hidden">
+                  <div id="bulk-labeling-progress-bar" class="progress-bar">0%</div>
+              </div>
+         </div>
+
+
+        <div id="gallery" class="gallery">
+            </div>
+    </div>
+
+    <div id="label-modal" class="modal hidden">
+        <div class="modal-content">
+            <span class="close-button" id="close-modal">&times;</span>
+            <img id="modal-image" src="#" alt="Selected image">
+            <h3 id="modal-image-name"></h3>
+            <p class="text-gray-700 mb-3 text-center">Click labels to assign/unassign:</p>
+            <div id="modal-available-labels" class="modal-labels">
+                </div>
+        </div>
+    </div>
+
+    <script>
+        const fileUpload = document.getElementById('file-upload');
+        const fileCountSpan = document.getElementById('file-count');
+        const galleryDiv = document.getElementById('gallery');
+        const newLabelInput = document.getElementById('new-label-input');
+        const addLabelButton = document.getElementById('add-label-button');
+        const availableLabelsDiv = document.getElementById('available-labels');
+        const filterLabelsDiv = document.getElementById('filter-labels');
+        const clearFiltersButton = document.getElementById('clear-filters-button');
+        const labelModal = document.getElementById('label-modal');
+        const modalImage = document.getElementById('modal-image');
+        const modalImageName = document.getElementById('modal-image-name');
+        const modalAvailableLabelsDiv = document.getElementById('modal-available-labels');
+        const closeModalButton = document.getElementById('close-modal');
+        const suggestLabelsButton = document.getElementById('suggest-labels-button');
+        const suggestedLabelsDiv = document.getElementById('suggested-labels');
+        const suggestionStatus = document.getElementById('suggestion-status');
+        const applyLabelsButton = document.getElementById('apply-labels-button');
+        const bulkLabelingStatus = document.getElementById('bulk-labeling-status');
+        const bulkLabelingProgressBarContainer = document.getElementById('bulk-labeling-progress-container');
+        const bulkLabelingProgressBar = document.getElementById('bulk-labeling-progress-bar');
+
+
+        let images = []; // Array to store image objects { file, url, labels }
+        let availableLabels = []; // Array of user-defined labels
+        let imageLabels = {}; // Object mapping file name to array of assigned labels { 'image.jpg': ['Nature', 'Animals'] }
+        let activeFilters = []; // Array of labels currently used for filtering
+        let model; // TensorFlow.js model
+
+        // --- IndexedDB Setup ---
+        const DB_NAME = 'PhotoLabelerDB';
+        const DB_VERSION = 1;
+        let db;
+
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+        request.onupgradeneeded = function(event) {
+            db = event.target.result;
+            // Create object stores if they don't exist
+            if (!db.objectStoreNames.contains('labels')) {
+                db.createObjectStore('labels', { keyPath: 'name' });
+            }
+            if (!db.objectStoreNames.contains('imageLabels')) {
+                 // Store image labels by file name
+                db.createObjectStore('imageLabels', { keyPath: 'fileName' });
+            }
+        };
+
+        request.onsuccess = function(event) {
+            db = event.target.result;
+            console.log('IndexedDB opened successfully');
+            loadLabelsFromDB();
+            // Image labels will be loaded when files are selected
+            loadModel(); // Start loading the ML model
+        };
+
+        request.onerror = function(event) {
+            console.error('IndexedDB error:', event.target.errorCode);
+            suggestionStatus.innerText = 'Error initializing database.';
+            bulkLabelingStatus.innerText = 'Error initializing database.';
+        };
+
+        // --- IndexedDB Data Operations ---
+        async function loadLabelsFromDB() {
+            const transaction = db.transaction(['labels'], 'readonly');
+            const store = transaction.objectStore('labels');
+            const allLabels = store.getAll();
+
+            allLabels.onsuccess = function() {
+                availableLabels = allLabels.result.map(item => item.name);
+                console.log('Loaded labels from DB:', availableLabels);
+                renderAvailableLabels();
+                renderFilterLabels();
+                renderModalLabels(); // Update modal labels based on loaded labels
+                updateButtonStates();
+            };
+
+            allLabels.onerror = function(event) {
+                 console.error('Error loading labels from DB:', event.target.error);
+            };
+        }
+
+         async function saveLabelToDB(labelName) {
+             const transaction = db.transaction(['labels'], 'readwrite');
+             const store = transaction.objectStore('labels');
+             store.put({ name: labelName }); // Use put for add/update
+             transaction.oncomplete = () => console.log(`Label "${labelName}" saved to DB`);
+             transaction.onerror = (event) => console.error(`Error saving label "${labelName}" to DB:`, event.target.error);
+         }
+
+         async function removeLabelFromDB(labelName) {
+             const transaction = db.transaction(['labels'], 'readwrite');
+             const store = transaction.objectStore('labels');
+             store.delete(labelName);
+             transaction.oncomplete = () => console.log(`Label "${labelName}" removed from DB`);
+             transaction.onerror = (event) => console.error(`Error removing label "${labelName}" from DB:`, event.target.error);
+         }
+
+        async function loadImageLabelsFromDB(fileNames) {
+            const transaction = db.transaction(['imageLabels'], 'readonly');
+            const store = transaction.objectStore('imageLabels');
+            const requests = fileNames.map(fileName => store.get(fileName));
+
+            return new Promise((resolve, reject) => {
+                let loadedCount = 0;
+                requests.forEach(req => {
+                    req.onsuccess = function() {
+                        if (req.result) {
+                            imageLabels[req.result.fileName] = req.result.labels;
+                        }
+                        loadedCount++;
+                        if (loadedCount === requests.length) {
+                            console.log('Loaded image labels from DB:', imageLabels);
+                            resolve();
+                        }
+                    };
+                    req.onerror = function(event) {
+                        console.error('Error loading image label from DB:', event.target.error);
+                        loadedCount++; // Still count even on error
+                        if (loadedCount === requests.length) {
+                             resolve(); // Resolve even if some fail
+                        }
+                    };
+                });
+                 // Handle case with no files
+                 if (fileNames.length === 0) {
+                     resolve();
+                 }
+            });
+        }
+
+         async function saveImageLabelsToDB(fileName, labels) {
+             const transaction = db.transaction(['imageLabels'], 'readwrite');
+             const store = transaction.objectStore('imageLabels');
+             store.put({ fileName: fileName, labels: labels });
+             transaction.oncomplete = () => console.log(`Labels for "${fileName}" saved to DB`);
+             transaction.onerror = (event) => console.error(`Error saving labels for "${fileName}" to DB:`, event.target.error);
+         }
+
+        async function removeImageLabelFromDB(fileName) {
+             const transaction = db.transaction(['imageLabels'], 'readwrite');
+             const store = transaction.objectStore('imageLabels');
+             store.delete(fileName);
+             transaction.oncomplete = () => console.log(`Image labels for "${fileName}" removed from DB`);
+             transaction.onerror = (event) => console.error(`Error removing image labels for "${fileName}" from DB:`, event.target.error);
+        }
+
+
+        // --- Model Loading ---
+        async function loadModel() {
+            try {
+                model = await mobilenet.load();
+                console.log('MobileNet model loaded.');
+                suggestionStatus.innerText = 'Model ready. Select photos to suggest labels.';
+                bulkLabelingStatus.innerText = 'Model ready. Select photos and add labels to apply.';
+                 updateButtonStates(); // Enable buttons after model loads
+            } catch (error) {
+                console.error('Error loading the MobileNet model:', error);
+                suggestionStatus.innerText = 'Error loading model.';
+                bulkLabelingStatus.innerText = 'Error loading model.';
+            }
+        }
+
+        // --- Label Management ---
+        function renderAvailableLabels() {
+            availableLabelsDiv.innerHTML = '';
+            availableLabels.forEach(label => {
+                const span = document.createElement('span');
+                span.classList.add('available-label');
+                span.innerHTML = `${label} <span class="remove-label" data-label="${label}">&times;</span>`;
+                availableLabelsDiv.appendChild(span);
+            });
+             // Add event listeners for remove buttons
+             availableLabelsDiv.querySelectorAll('.remove-label').forEach(button => {
+                 button.addEventListener('click', function(event) {
+                     event.stopPropagation(); // Prevent label click
+                     const labelToRemove = this.dataset.label;
+                     removeLabel(labelToRemove);
+                 });
+             });
+             updateButtonStates();
+             renderModalLabels(); // Keep modal labels updated
+        }
+
+        function addLabel() {
+            const newLabel = newLabelInput.value.trim();
+            if (newLabel && !availableLabels.includes(newLabel)) {
+                availableLabels.push(newLabel);
+                newLabelInput.value = '';
+                saveLabelToDB(newLabel);
+                renderAvailableLabels();
+                renderFilterLabels();
+                renderModalLabels();
+                updateButtonStates();
+            }
+        }
+
+        function removeLabel(labelToRemove) {
+            if (confirm(`Are you sure you want to remove the label "${labelToRemove}"? This will remove it from all photos.`)) {
+                // Remove from available labels
+                availableLabels = availableLabels.filter(label => label !== labelToRemove);
+                removeLabelFromDB(labelToRemove);
+
+                // Remove from image labels
+                for (const fileName in imageLabels) {
+                    imageLabels[fileName] = imageLabels[fileName].filter(label => label !== labelToRemove);
+                     // If image has no labels left, remove its entry from imageLabels and DB
+                     if (imageLabels[fileName].length === 0) {
+                         delete imageLabels[fileName];
+                         removeImageLabelFromDB(fileName);
+                     } else {
+                        saveImageLabelsToDB(fileName, imageLabels[fileName]); // Save updated labels for this image
+                     }
+                }
+
+
+                renderAvailableLabels();
+                renderFilterLabels();
+                renderGallery(activeFilters); // Re-render gallery to reflect label removal
+                renderModalLabels(); // Update modal labels
+                updateButtonStates();
+            }
+        }
+
+
+        addLabelButton.addEventListener('click', addLabel);
+        newLabelInput.addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                addLabel();
+            }
+        });
+
+        // --- Gallery Rendering ---
+        function renderGallery(filter = []) {
+            galleryDiv.innerHTML = '';
+            const filteredImages = images.filter(img => {
+                if (filter.length === 0) {
+                    return true; // Show all if no filters
+                }
+                // Check if the image has ALL the active filter labels
+                const imageAssignedLabels = imageLabels[img.file.name] || [];
+                return filter.every(filterLabel => imageAssignedLabels.includes(filterLabel));
+            });
+
+            filteredImages.forEach((img, index) => {
+                const item = document.createElement('div');
+                item.classList.add('gallery-item');
+                // Store file name instead of index, as index can change with filtering/sorting
+                item.dataset.fileName = img.file.name;
+
+                const imgElement = document.createElement('img');
+                imgElement.src = img.url;
+                imgElement.alt = img.file.name;
+
+                const infoDiv = document.createElement('div');
+                infoDiv.classList.add('image-info');
+
+                const nameSpan = document.createElement('span');
+                nameSpan.classList.add('file-name');
+                nameSpan.innerText = img.file.name;
+
+                const labelsDiv = document.createElement('div');
+                labelsDiv.classList.add('image-labels');
+                 const imageAssignedLabels = imageLabels[img.file.name] || [];
+                imageAssignedLabels.forEach(label => {
+                    const labelSpan = document.createElement('span');
+                    labelSpan.classList.add('image-label');
+                    labelSpan.innerText = label;
+                    labelsDiv.appendChild(labelSpan);
+                });
+
+                infoDiv.appendChild(nameSpan);
+                infoDiv.appendChild(labelsDiv);
+                item.appendChild(imgElement);
+                item.appendChild(infoDiv);
+
+                // Add click listener to open modal
+                item.addEventListener('click', () => openModal(img.file.name));
+
+                galleryDiv.appendChild(item);
+            });
+        }
+
+        // --- File Handling ---
+        fileUpload.addEventListener('change', async function(event) {
+            const files = Array.from(event.target.files);
+            const newImages = [];
+            const fileNamesToLoadLabelsFor = [];
+
+            files.forEach(file => {
+                if (file.type.startsWith('image/')) {
+                     // Check if an image with the same name is already loaded in the 'images' array
+                     const existingImageIndex = images.findIndex(img => img.file.name === file.name);
+
+                     if (existingImageIndex === -1) {
+                         // New image, create a new object
+                         const newImage = {
+                             file: file,
+                             url: URL.createObjectURL(file), // Create URL immediately
+                             // Labels will be loaded from DB or initialized later
+                         };
+                         newImages.push(newImage);
+                         fileNamesToLoadLabelsFor.push(file.name); // Add to list to load labels
+                     } else {
+                         // Image with this name already exists, update its URL if needed
+                         // (This might happen if user selects the same file again)
+                         images[existingImageIndex].url = URL.createObjectURL(file);
+                         // No need to add to fileNamesToLoadLabelsFor, labels are already in imageLabels object
+                     }
+                }
+            });
+
+            // Add new images to the main images array
+            images = [...images, ...newImages];
+            fileCountSpan.innerText = `${images.length} photos selected`;
+
+            // Load assigned labels for the newly added images from DB
+            await loadImageLabelsFromDB(fileNamesToLoadLabelsFor);
+
+            renderGallery(activeFilters); // Initial render of the gallery
+            updateButtonStates(); // Update button states based on loaded photos
+        });
+
+
+        // --- Modal Functionality ---
+        let currentImageFileName = null; // File name of the image currently in the modal
+
+        function openModal(fileName) {
+            currentImageFileName = fileName;
+            const image = images.find(img => img.file.name === fileName);
+
+            if (!image) return; // Should not happen if called from gallery click
+
+            modalImage.src = image.url;
+            modalImage.alt = image.file.name;
+            modalImageName.innerText = image.file.name;
+
+            renderModalLabels(imageLabels[fileName] || []); // Render labels in the modal, highlighting selected ones
+            labelModal.classList.remove('hidden');
+        }
+
+        function closeModal() {
+            labelModal.classList.add('hidden');
+            currentImageFileName = null; // Reset file name
+            renderGallery(activeFilters); // Re-render gallery to show updated labels
+            // Labels are saved to DB immediately when toggled in modal
+        }
+
+        closeModalButton.addEventListener('click', closeModal);
+
+        // Close modal if clicking outside the modal content
+        labelModal.addEventListener('click', function(event) {
+            if (event.target === labelModal) {
+                closeModal();
+            }
+        });
+
+        // Close modal with Escape key
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'Escape' && !labelModal.classList.contains('hidden')) {
+                closeModal();
+            }
+        });
+
+
+        function renderModalLabels(selectedLabels = []) {
+            modalAvailableLabelsDiv.innerHTML = '';
+            availableLabels.forEach(label => {
+                const span = document.createElement('span');
+                span.classList.add('modal-label');
+                span.innerText = label;
+
+                if (selectedLabels.includes(label)) {
+                    span.classList.add('selected');
+                }
+
+                span.addEventListener('click', () => toggleLabelForCurrentImage(label));
+                modalAvailableLabelsDiv.appendChild(span);
+            });
+        }
+
+        function toggleLabelForCurrentImage(label) {
+            if (currentImageFileName) {
+                // Ensure the image entry exists in imageLabels
+                if (!imageLabels[currentImageFileName]) {
+                    imageLabels[currentImageFileName] = [];
+                }
+
+                const imageAssignedLabels = imageLabels[currentImageFileName];
+                const labelIndex = imageAssignedLabels.indexOf(label);
+
+                if (labelIndex === -1) {
+                    // Label not present, add it
+                    imageAssignedLabels.push(label);
+                } else {
+                    // Label present, remove it
+                    imageAssignedLabels.splice(labelIndex, 1);
+                }
+
+                renderModalLabels(imageAssignedLabels); // Re-render modal labels to show selection change
+                saveImageLabelsToDB(currentImageFileName, imageAssignedLabels); // Save changes to DB immediately
+            }
+        }
+
+        // --- Filtering Functionality ---
+         function renderFilterLabels() {
+             filterLabelsDiv.innerHTML = '';
+             availableLabels.forEach(label => {
+                 const span = document.createElement('span');
+                 span.classList.add('filter-label');
+                 span.innerText = label;
+
+                 if (activeFilters.includes(label)) {
+                     span.classList.add('active');
+                 }
+
+                 span.addEventListener('click', () => toggleFilter(label));
+                 filterLabelsDiv.appendChild(span);
+             });
+         }
+
+         function toggleFilter(label) {
+             const filterIndex = activeFilters.indexOf(label);
+             if (filterIndex === -1) {
+                 // Filter not active, add it
+                 activeFilters.push(label);
+             } else {
+                 // Filter active, remove it
+                 activeFilters.splice(filterIndex, 1);
+             }
+             renderFilterLabels(); // Update filter button appearance
+             renderGallery(activeFilters); // Re-render gallery with new filters
+         }
+
+         clearFiltersButton.addEventListener('click', function() {
+             activeFilters = [];
+             renderFilterLabels();
+             renderGallery(activeFilters);
+         });
+
+
+        // --- Label Suggestion from Subset ---
+        const SUBSET_SIZE = 20; // Number of images to use for suggestion
+
+        suggestLabelsButton.addEventListener('click', async function() {
+             if (!model) {
+                 suggestionStatus.innerText = 'Model not loaded yet.';
+                 return;
+             }
+             if (images.length === 0) {
+                  suggestionStatus.innerText = 'No photos selected.';
+                  return;
+             }
+
+             suggestionStatus.innerText = 'Analyzing subset...';
+             suggestedLabelsDiv.innerHTML = ''; // Clear previous suggestions
+
+             // Select a random subset
+             const subset = images.slice().sort(() => 0.5 - Math.random()).slice(0, Math.min(images.length, SUBSET_SIZE));
+
+             const suggested = new Set();
+
+             for (const imgObj of subset) {
+                 try {
+                     // Create a temporary image element to classify
+                     const imgElement = new Image();
+                     imgElement.src = imgObj.url;
+                     await imgElement.decode(); // Ensure image is loaded
+
+                     const predictions = await model.classify(imgElement);
+                     // Add top 3 predicted class names as suggestions
+                     predictions.slice(0, 3).forEach(p => suggested.add(p.className));
+
+                 } catch (error) {
+                     console.error('Error classifying image in subset:', imgObj.file.name, error);
+                     // Continue with the next image
+                 }
+             }
+
+             renderSuggestedLabels(Array.from(suggested));
+             suggestionStatus.innerText = `Found ${suggested.size} potential labels from a subset of ${subset.length} photos.`;
+        });
+
+        function renderSuggestedLabels(suggestions) {
+            suggestedLabelsDiv.innerHTML = '';
+            if (suggestions.length === 0) {
+                suggestedLabelsDiv.innerText = 'No suggestions found.';
+                return;
+            }
+
+            suggestions.forEach(suggestion => {
+                const span = document.createElement('span');
+                span.classList.add('suggested-label');
+                span.innerHTML = `
+                    ${suggestion}
+                    <span class="accept-suggestion" data-label="${suggestion}" title="Add as custom label">&#10004;</span>
+                    <span class="discard-suggestion" data-label="${suggestion}" title="Discard suggestion">&times;</span>
+                `;
+                suggestedLabelsDiv.appendChild(span);
+            });
+
+            // Add event listeners for suggestion actions
+            suggestedLabelsDiv.querySelectorAll('.accept-suggestion').forEach(button => {
+                button.addEventListener('click', function() {
+                    const labelToAdd = this.dataset.label;
+                    if (!availableLabels.includes(labelToAdd)) {
+                        availableLabels.push(labelToAdd);
+                        saveLabelToDB(labelToAdd);
+                        renderAvailableLabels();
+                        renderFilterLabels();
+                        renderModalLabels();
+                        updateButtonStates();
+                    }
+                    // Remove the suggestion span
+                    this.parentElement.remove();
+                     if(suggestedLabelsDiv.children.length === 0) suggestedLabelsDiv.innerHTML = 'No suggestions remaining.';
+                });
+            });
+
+             // Edit suggestion functionality (optional for this prototype)
+            // suggestedLabelsDiv.querySelectorAll('.edit-suggestion').forEach(button => {
+            //     button.addEventListener('click', function() {
+            //         const labelToEdit = this.dataset.label;
+            //         const newName = prompt(`Edit label suggestion "${labelToEdit}":`, labelToEdit);
+            //         if (newName && newName.trim() !== '' && newName.trim() !== labelToEdit) {
+            //              // Find the suggestion span and update its text and data attribute
+            //              const suggestionSpan = this.parentElement;
+            //              suggestionSpan.childNodes[0].nodeValue = newName.trim() + ' '; // Update text node
+            //              suggestionSpan.querySelector('.accept-suggestion').dataset.label = newName.trim();
+            //              suggestionSpan.querySelector('.edit-suggestion').dataset.label = newName.trim();
+            //              suggestionSpan.querySelector('.discard-suggestion').dataset.label = newName.trim();
+            //         }
+            //     });
+            // });
+
+            suggestedLabelsDiv.querySelectorAll('.discard-suggestion').forEach(button => {
+                button.addEventListener('click', function() {
+                    // Remove the suggestion span
+                    this.parentElement.remove();
+                    if(suggestedLabelsDiv.children.length === 0) suggestedLabelsDiv.innerHTML = 'No suggestions remaining.';
+                });
+            });
+        }
+
+
+        // --- Bulk Label Application ---
+        applyLabelsButton.addEventListener('click', async function() {
+             if (!model) {
+                 bulkLabelingStatus.innerText = 'Model not loaded yet.';
+                 return;
+             }
+             if (images.length === 0) {
+                  bulkLabelingStatus.innerText = 'No photos selected.';
+                  return;
+             }
+             if (availableLabels.length === 0) {
+                 bulkLabelingStatus.innerText = 'No custom labels defined to apply.';
+                 return;
+             }
+
+             bulkLabelingStatus.innerText = 'Applying labels...';
+             bulkLabelingProgressBarContainer.classList.remove('hidden');
+             bulkLabelingProgressBar.style.width = '0%';
+             bulkLabelingProgressBar.innerText = '0%';
+
+             let processedCount = 0;
+
+             for (const imgObj of images) {
+                 try {
+                     const imgElement = new Image();
+                     imgElement.src = imgObj.url;
+                     await imgElement.decode(); // Ensure image is loaded
+
+                     const predictions = await model.classify(imgElement);
+
+                     // Simple mapping: if a predicted class name is an exact match
+                     // to an available label, assign that label.
+                     // A more advanced version could use fuzzy matching or a user-defined mapping.
+                     const assigned = [];
+                     predictions.forEach(p => {
+                         // Consider top few predictions, e.g., top 5
+                         if (availableLabels.includes(p.className) && !assigned.includes(p.className)) {
+                             assigned.push(p.className);
+                         }
+                     });
+
+                     // Update the imageLabels object and save to DB
+                     imageLabels[imgObj.file.name] = assigned;
+                     saveImageLabelsToDB(imgObj.file.name, assigned);
+
+                 } catch (error) {
+                     console.error('Error classifying image during bulk labeling:', imgObj.file.name, error);
+                     // Continue with the next image
+                 } finally {
+                     processedCount++;
+                     const progress = Math.round((processedCount / images.length) * 100);
+                     bulkLabelingProgressBar.style.width = `${progress}%`;
+                     bulkLabelingProgressBar.innerText = `${progress}%`;
+                 }
+             }
+
+             bulkLabelingStatus.innerText = 'Label application complete.';
+             // Re-render the gallery to show the newly applied labels
+             renderGallery(activeFilters);
+             updateButtonStates();
+        });
+
+
+        // --- Button State Management ---
+        function updateButtonStates() {
+             const hasPhotos = images.length > 0;
+             const hasLabels = availableLabels.length > 0;
+             const isModelLoaded = !!model;
+
+             suggestLabelsButton.disabled = !hasPhotos || !isModelLoaded;
+             applyLabelsButton.disabled = !hasPhotos || !hasLabels || !isModelLoaded;
+        }
+
+
+        // --- Initial Setup ---
+        // Initial load of labels is handled in IndexedDB request.onsuccess
+        // Initial render of gallery happens after files are selected and labels loaded.
+        // Model loading starts on IndexedDB success.
+        updateButtonStates(); // Set initial state
+
+    </script>
+</body>
+</html>
