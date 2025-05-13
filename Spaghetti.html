@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Advanced Local Photo Labeler & Filter</title>
+    <title>Refactored Local Photo Labeler & Filter</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
@@ -18,7 +18,7 @@
             padding: 30px;
             border-radius: 12px;
             box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
-            max-width: 1200px; /* Wider container */
+            max-width: 1200px;
             margin: 20px auto;
         }
         .file-input-label, .button {
@@ -53,7 +53,7 @@
         }
         .gallery {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); /* Slightly larger grid items */
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
             gap: 15px;
             margin-top: 30px;
         }
@@ -74,7 +74,7 @@
         }
         .gallery-item img {
             width: 100%;
-            height: 180px; /* Fixed height for images */
+            height: 180px;
             object-fit: cover;
         }
         .image-info {
@@ -91,7 +91,7 @@
             word-break: break-all;
             white-space: nowrap;
             overflow: hidden;
-            text-overflow: ellipsis; /* Truncate long names */
+            text-overflow: ellipsis;
         }
         .image-labels {
             display: flex;
@@ -106,7 +106,7 @@
             padding: 3px 8px;
             border-radius: 9999px;
         }
-        .label-management, .filter-area, .suggestion-area {
+        .label-management, .filter-area, .suggestion-area, .bulk-labeling-area {
             margin-top: 20px;
             padding-top: 20px;
             border-top: 1px solid #e5e7eb;
@@ -181,13 +181,14 @@
               cursor: pointer;
               margin-left: 5px;
          }
-         .suggested-label .edit-suggestion {
+         /* Edit suggestion functionality removed for simplicity in this iteration */
+         /* .suggested-label .edit-suggestion {
               font-size: 1em;
               font-weight: bold;
-              color: #f59e0b; /* Yellow for edit */
+              color: #f59e0b;
               cursor: pointer;
               margin-left: 5px;
-         }
+         } */
          .suggested-label .discard-suggestion {
               font-size: 1em;
               font-weight: bold;
@@ -212,7 +213,7 @@
             background-color: #ffffff;
             padding: 30px;
             border-radius: 12px;
-            max-width: 700px; /* Wider modal */
+            max-width: 700px;
             width: 90%;
             max-height: 90vh;
             overflow-y: auto;
@@ -290,7 +291,7 @@
 </head>
 <body>
     <div class="container">
-        <h1 class="text-3xl font-bold text-gray-800 mb-6">Advanced Local Photo Labeler & Filter</h1>
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">Refactored Local Photo Labeler & Filter</h1>
         <p class="text-gray-600 mb-6">Select photos from your computer to label and filter them locally. Labels and assignments are saved in your browser.</p>
 
         <input type="file" id="file-upload" accept="image/*" multiple>
@@ -312,9 +313,9 @@
              <h2 class="text-xl font-semibold text-gray-700 mb-4">Suggest Labels from Subset</h2>
              <p class="text-gray-600 mb-4">Use a small random sample of photos to suggest initial labels based on a pre-trained model.</p>
              <button id="suggest-labels-button" class="button secondary" disabled>Suggest Labels (requires photos)</button>
+             <p id="suggestion-status" class="status-message"></p>
              <div id="suggested-labels" class="suggested-labels mt-4">
                  </div>
-             <p id="suggestion-status" class="status-message"></p>
          </div>
 
         <div class="filter-area">
@@ -351,6 +352,7 @@
     </div>
 
     <script>
+        // --- DOM Elements ---
         const fileUpload = document.getElementById('file-upload');
         const fileCountSpan = document.getElementById('file-count');
         const galleryDiv = document.getElementById('gallery');
@@ -372,83 +374,112 @@
         const bulkLabelingProgressBarContainer = document.getElementById('bulk-labeling-progress-container');
         const bulkLabelingProgressBar = document.getElementById('bulk-labeling-progress-bar');
 
-
-        let images = []; // Array to store image objects { file, url, labels }
+        // --- State Variables ---
+        let images = []; // Array to store image objects { file, url }
         let availableLabels = []; // Array of user-defined labels
         let imageLabels = {}; // Object mapping file name to array of assigned labels { 'image.jpg': ['Nature', 'Animals'] }
         let activeFilters = []; // Array of labels currently used for filtering
         let model; // TensorFlow.js model
+        let db; // IndexedDB database instance
+
+        // --- Constants ---
+        const DB_NAME = 'PhotoLabelerDB';
+        const DB_VERSION = 2; // Increment version for schema changes (added imageLabels store)
+        const SUBSET_SIZE = 20; // Number of images for label suggestion
+        const IMAGE_SIZE_FOR_MODEL = 224; // Target size for images fed to MobileNet
 
         // --- IndexedDB Setup ---
-        const DB_NAME = 'PhotoLabelerDB';
-        const DB_VERSION = 1;
-        let db;
+        function openDatabase() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-        const request = indexedDB.open(DB_NAME, DB_VERSION);
+                request.onupgradeneeded = function(event) {
+                    db = event.target.result;
+                    console.log('IndexedDB upgrade needed. Creating object stores.');
+                    // Create object stores if they don't exist
+                    if (!db.objectStoreNames.contains('labels')) {
+                        db.createObjectStore('labels', { keyPath: 'name' });
+                    }
+                    if (!db.objectStoreNames.contains('imageLabels')) {
+                         // Store image labels by file name
+                        db.createObjectStore('imageLabels', { keyPath: 'fileName' });
+                    }
+                };
 
-        request.onupgradeneeded = function(event) {
-            db = event.target.result;
-            // Create object stores if they don't exist
-            if (!db.objectStoreNames.contains('labels')) {
-                db.createObjectStore('labels', { keyPath: 'name' });
-            }
-            if (!db.objectStoreNames.contains('imageLabels')) {
-                 // Store image labels by file name
-                db.createObjectStore('imageLabels', { keyPath: 'fileName' });
-            }
-        };
+                request.onsuccess = function(event) {
+                    db = event.target.result;
+                    console.log('IndexedDB opened successfully');
+                    resolve(db);
+                };
 
-        request.onsuccess = function(event) {
-            db = event.target.result;
-            console.log('IndexedDB opened successfully');
-            loadLabelsFromDB();
-            // Image labels will be loaded when files are selected
-            loadModel(); // Start loading the ML model
-        };
-
-        request.onerror = function(event) {
-            console.error('IndexedDB error:', event.target.errorCode);
-            suggestionStatus.innerText = 'Error initializing database.';
-            bulkLabelingStatus.innerText = 'Error initializing database.';
-        };
+                request.onerror = function(event) {
+                    console.error('IndexedDB error:', event.target.errorCode);
+                    reject(event.target.error);
+                };
+            });
+        }
 
         // --- IndexedDB Data Operations ---
         async function loadLabelsFromDB() {
-            const transaction = db.transaction(['labels'], 'readonly');
-            const store = transaction.objectStore('labels');
-            const allLabels = store.getAll();
+            if (!db) await openDatabase(); // Ensure DB is open
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['labels'], 'readonly');
+                const store = transaction.objectStore('labels');
+                const allLabels = store.getAll();
 
-            allLabels.onsuccess = function() {
-                availableLabels = allLabels.result.map(item => item.name);
-                console.log('Loaded labels from DB:', availableLabels);
-                renderAvailableLabels();
-                renderFilterLabels();
-                renderModalLabels(); // Update modal labels based on loaded labels
-                updateButtonStates();
-            };
+                allLabels.onsuccess = function() {
+                    availableLabels = allLabels.result.map(item => item.name);
+                    console.log('Loaded labels from DB:', availableLabels);
+                    renderAvailableLabels();
+                    renderFilterLabels();
+                    renderModalLabels(); // Update modal labels based on loaded labels
+                    updateButtonStates();
+                    resolve();
+                };
 
-            allLabels.onerror = function(event) {
-                 console.error('Error loading labels from DB:', event.target.error);
-            };
+                allLabels.onerror = function(event) {
+                     console.error('Error loading labels from DB:', event.target.error);
+                     reject(event.target.error);
+                };
+            });
         }
 
          async function saveLabelToDB(labelName) {
-             const transaction = db.transaction(['labels'], 'readwrite');
-             const store = transaction.objectStore('labels');
-             store.put({ name: labelName }); // Use put for add/update
-             transaction.oncomplete = () => console.log(`Label "${labelName}" saved to DB`);
-             transaction.onerror = (event) => console.error(`Error saving label "${labelName}" to DB:`, event.target.error);
+             if (!db) await openDatabase(); // Ensure DB is open
+             return new Promise((resolve, reject) => {
+                 const transaction = db.transaction(['labels'], 'readwrite');
+                 const store = transaction.objectStore('labels');
+                 const request = store.put({ name: labelName }); // Use put for add/update
+                 request.onsuccess = () => {
+                     console.log(`Label "${labelName}" saved to DB`);
+                     resolve();
+                 };
+                 request.onerror = (event) => {
+                     console.error(`Error saving label "${labelName}" to DB:`, event.target.error);
+                     reject(event.target.error);
+                 };
+             });
          }
 
          async function removeLabelFromDB(labelName) {
-             const transaction = db.transaction(['labels'], 'readwrite');
-             const store = transaction.objectStore('labels');
-             store.delete(labelName);
-             transaction.oncomplete = () => console.log(`Label "${labelName}" removed from DB`);
-             transaction.onerror = (event) => console.error(`Error removing label "${labelName}" from DB:`, event.target.error);
+             if (!db) await openDatabase(); // Ensure DB is open
+             return new Promise((resolve, reject) => {
+                 const transaction = db.transaction(['labels'], 'readwrite');
+                 const store = transaction.objectStore('labels');
+                 const request = store.delete(labelName);
+                 request.onsuccess = () => {
+                     console.log(`Label "${labelName}" removed from DB`);
+                     resolve();
+                 };
+                 request.onerror = (event) => {
+                     console.error(`Error removing label "${labelName}" from DB:`, event.target.error);
+                     reject(event.target.error);
+                 };
+             });
          }
 
         async function loadImageLabelsFromDB(fileNames) {
+            if (!db) await openDatabase(); // Ensure DB is open
             const transaction = db.transaction(['imageLabels'], 'readonly');
             const store = transaction.objectStore('imageLabels');
             const requests = fileNames.map(fileName => store.get(fileName));
@@ -462,7 +493,7 @@
                         }
                         loadedCount++;
                         if (loadedCount === requests.length) {
-                            console.log('Loaded image labels from DB:', imageLabels);
+                            console.log('Loaded image labels from DB for selected files:', imageLabels);
                             resolve();
                         }
                     };
@@ -482,19 +513,37 @@
         }
 
          async function saveImageLabelsToDB(fileName, labels) {
-             const transaction = db.transaction(['imageLabels'], 'readwrite');
-             const store = transaction.objectStore('imageLabels');
-             store.put({ fileName: fileName, labels: labels });
-             transaction.oncomplete = () => console.log(`Labels for "${fileName}" saved to DB`);
-             transaction.onerror = (event) => console.error(`Error saving labels for "${fileName}" to DB:`, event.target.error);
+             if (!db) await openDatabase(); // Ensure DB is open
+             return new Promise((resolve, reject) => {
+                 const transaction = db.transaction(['imageLabels'], 'readwrite');
+                 const store = transaction.objectStore('imageLabels');
+                 const request = store.put({ fileName: fileName, labels: labels });
+                 request.onsuccess = () => {
+                     console.log(`Labels for "${fileName}" saved to DB`);
+                     resolve();
+                 };
+                 request.onerror = (event) => {
+                     console.error(`Error saving labels for "${fileName}" to DB:`, event.target.error);
+                     reject(event.target.error);
+                 };
+             });
          }
 
         async function removeImageLabelFromDB(fileName) {
-             const transaction = db.transaction(['imageLabels'], 'readwrite');
-             const store = transaction.objectStore('imageLabels');
-             store.delete(fileName);
-             transaction.oncomplete = () => console.log(`Image labels for "${fileName}" removed from DB`);
-             transaction.onerror = (event) => console.error(`Error removing image labels for "${fileName}" from DB:`, event.target.error);
+             if (!db) await openDatabase(); // Ensure DB is open
+             return new Promise((resolve, reject) => {
+                 const transaction = db.transaction(['imageLabels'], 'readwrite');
+                 const store = transaction.objectStore('imageLabels');
+                 const request = store.delete(fileName);
+                 request.onsuccess = () => {
+                     console.log(`Image labels for "${fileName}" removed from DB`);
+                     resolve();
+                 };
+                 request.onerror = (event) => {
+                     console.error(`Error removing image labels for "${fileName}" from DB:`, event.target.error);
+                     reject(event.target.error);
+                 };
+             });
         }
 
 
@@ -512,6 +561,42 @@
                 bulkLabelingStatus.innerText = 'Error loading model.';
             }
         }
+
+        // --- Image Processing (Downsizing) ---
+        function resizeImage(imageElement, targetSize) {
+            return new Promise((resolve) => {
+                const canvas = document.createElement('canvas');
+                const context = canvas.getContext('2d');
+
+                // Calculate new dimensions while maintaining aspect ratio
+                let width = imageElement.width;
+                let height = imageElement.height;
+
+                if (width > height) {
+                    if (width > targetSize) {
+                        height *= targetSize / width;
+                        width = targetSize;
+                    }
+                } else {
+                    if (height > targetSize) {
+                        width *= targetSize / height;
+                        height = targetSize;
+                    }
+                }
+
+                canvas.width = width;
+                canvas.height = height;
+
+                // Draw the resized image onto the canvas
+                context.drawImage(imageElement, 0, 0, width, height);
+
+                // Convert canvas to a Blob
+                canvas.toBlob(blob => {
+                    resolve(blob);
+                }, 'image/jpeg', 0.8); // Use JPEG with 80% quality
+            });
+        }
+
 
         // --- Label Management ---
         function renderAvailableLabels() {
@@ -534,12 +619,12 @@
              renderModalLabels(); // Keep modal labels updated
         }
 
-        function addLabel() {
+        async function addLabel() {
             const newLabel = newLabelInput.value.trim();
             if (newLabel && !availableLabels.includes(newLabel)) {
                 availableLabels.push(newLabel);
                 newLabelInput.value = '';
-                saveLabelToDB(newLabel);
+                await saveLabelToDB(newLabel);
                 renderAvailableLabels();
                 renderFilterLabels();
                 renderModalLabels();
@@ -547,24 +632,23 @@
             }
         }
 
-        function removeLabel(labelToRemove) {
+        async function removeLabel(labelToRemove) {
             if (confirm(`Are you sure you want to remove the label "${labelToRemove}"? This will remove it from all photos.`)) {
                 // Remove from available labels
                 availableLabels = availableLabels.filter(label => label !== labelToRemove);
-                removeLabelFromDB(labelToRemove);
+                await removeLabelFromDB(labelToRemove);
 
-                // Remove from image labels
+                // Remove from image labels and update DB
                 for (const fileName in imageLabels) {
-                    imageLabels[fileName] = imageLabels[fileName].filter(label => label !== labelToRemove);
-                     // If image has no labels left, remove its entry from imageLabels and DB
-                     if (imageLabels[fileName].length === 0) {
-                         delete imageLabels[fileName];
-                         removeImageLabelFromDB(fileName);
-                     } else {
-                        saveImageLabelsToDB(fileName, imageLabels[fileName]); // Save updated labels for this image
-                     }
+                    const updatedLabels = imageLabels[fileName].filter(label => label !== labelToRemove);
+                    if (updatedLabels.length === 0) {
+                        delete imageLabels[fileName];
+                        await removeImageLabelFromDB(fileName);
+                    } else {
+                        imageLabels[fileName] = updatedLabels;
+                        await saveImageLabelsToDB(fileName, updatedLabels);
+                    }
                 }
-
 
                 renderAvailableLabels();
                 renderFilterLabels();
@@ -594,10 +678,9 @@
                 return filter.every(filterLabel => imageAssignedLabels.includes(filterLabel));
             });
 
-            filteredImages.forEach((img, index) => {
+            filteredImages.forEach((img) => {
                 const item = document.createElement('div');
                 item.classList.add('gallery-item');
-                // Store file name instead of index, as index can change with filtering/sorting
                 item.dataset.fileName = img.file.name;
 
                 const imgElement = document.createElement('img');
@@ -639,7 +722,7 @@
             const newImages = [];
             const fileNamesToLoadLabelsFor = [];
 
-            files.forEach(file => {
+            for (const file of files) {
                 if (file.type.startsWith('image/')) {
                      // Check if an image with the same name is already loaded in the 'images' array
                      const existingImageIndex = images.findIndex(img => img.file.name === file.name);
@@ -649,18 +732,20 @@
                          const newImage = {
                              file: file,
                              url: URL.createObjectURL(file), // Create URL immediately
-                             // Labels will be loaded from DB or initialized later
                          };
                          newImages.push(newImage);
                          fileNamesToLoadLabelsFor.push(file.name); // Add to list to load labels
                      } else {
                          // Image with this name already exists, update its URL if needed
                          // (This might happen if user selects the same file again)
+                         // Revoke old URL to free memory
+                         URL.revokeObjectURL(images[existingImageIndex].url);
                          images[existingImageIndex].url = URL.createObjectURL(file);
                          // No need to add to fileNamesToLoadLabelsFor, labels are already in imageLabels object
                      }
                 }
-            });
+            }
+
 
             // Add new images to the main images array
             images = [...images, ...newImages];
@@ -681,7 +766,7 @@
             currentImageFileName = fileName;
             const image = images.find(img => img.file.name === fileName);
 
-            if (!image) return; // Should not happen if called from gallery click
+            if (!image) return;
 
             modalImage.src = image.url;
             modalImage.alt = image.file.name;
@@ -731,7 +816,7 @@
             });
         }
 
-        function toggleLabelForCurrentImage(label) {
+        async function toggleLabelForCurrentImage(label) {
             if (currentImageFileName) {
                 // Ensure the image entry exists in imageLabels
                 if (!imageLabels[currentImageFileName]) {
@@ -750,7 +835,7 @@
                 }
 
                 renderModalLabels(imageAssignedLabels); // Re-render modal labels to show selection change
-                saveImageLabelsToDB(currentImageFileName, imageAssignedLabels); // Save changes to DB immediately
+                await saveImageLabelsToDB(currentImageFileName, imageAssignedLabels); // Save changes to DB immediately
             }
         }
 
@@ -792,8 +877,6 @@
 
 
         // --- Label Suggestion from Subset ---
-        const SUBSET_SIZE = 20; // Number of images to use for suggestion
-
         suggestLabelsButton.addEventListener('click', async function() {
              if (!model) {
                  suggestionStatus.innerText = 'Model not loaded yet.';
@@ -804,8 +887,9 @@
                   return;
              }
 
-             suggestionStatus.innerText = 'Analyzing subset...';
+             suggestionStatus.innerText = `Analyzing a random subset of ${Math.min(images.length, SUBSET_SIZE)} photos...`;
              suggestedLabelsDiv.innerHTML = ''; // Clear previous suggestions
+             suggestLabelsButton.disabled = true; // Disable button during processing
 
              // Select a random subset
              const subset = images.slice().sort(() => 0.5 - Math.random()).slice(0, Math.min(images.length, SUBSET_SIZE));
@@ -819,9 +903,19 @@
                      imgElement.src = imgObj.url;
                      await imgElement.decode(); // Ensure image is loaded
 
-                     const predictions = await model.classify(imgElement);
+                     // Resize image before classification
+                     const resizedBlob = await resizeImage(imgElement, IMAGE_SIZE_FOR_MODEL);
+                     const resizedImgElement = new Image();
+                     resizedImgElement.src = URL.createObjectURL(resizedBlob);
+                     await resizedImgElement.decode();
+
+                     const predictions = await model.classify(resizedImgElement);
+
                      // Add top 3 predicted class names as suggestions
                      predictions.slice(0, 3).forEach(p => suggested.add(p.className));
+
+                     // Clean up the temporary URL
+                     URL.revokeObjectURL(resizedImgElement.src);
 
                  } catch (error) {
                      console.error('Error classifying image in subset:', imgObj.file.name, error);
@@ -830,7 +924,8 @@
              }
 
              renderSuggestedLabels(Array.from(suggested));
-             suggestionStatus.innerText = `Found ${suggested.size} potential labels from a subset of ${subset.length} photos.`;
+             suggestionStatus.innerText = `Found ${suggested.size} potential labels from a subset of ${subset.length} photos. Review and add them to your custom labels.`;
+             suggestLabelsButton.disabled = false; // Re-enable button
         });
 
         function renderSuggestedLabels(suggestions) {
@@ -853,11 +948,11 @@
 
             // Add event listeners for suggestion actions
             suggestedLabelsDiv.querySelectorAll('.accept-suggestion').forEach(button => {
-                button.addEventListener('click', function() {
+                button.addEventListener('click', async function() {
                     const labelToAdd = this.dataset.label;
                     if (!availableLabels.includes(labelToAdd)) {
                         availableLabels.push(labelToAdd);
-                        saveLabelToDB(labelToAdd);
+                        await saveLabelToDB(labelToAdd);
                         renderAvailableLabels();
                         renderFilterLabels();
                         renderModalLabels();
@@ -868,22 +963,6 @@
                      if(suggestedLabelsDiv.children.length === 0) suggestedLabelsDiv.innerHTML = 'No suggestions remaining.';
                 });
             });
-
-             // Edit suggestion functionality (optional for this prototype)
-            // suggestedLabelsDiv.querySelectorAll('.edit-suggestion').forEach(button => {
-            //     button.addEventListener('click', function() {
-            //         const labelToEdit = this.dataset.label;
-            //         const newName = prompt(`Edit label suggestion "${labelToEdit}":`, labelToEdit);
-            //         if (newName && newName.trim() !== '' && newName.trim() !== labelToEdit) {
-            //              // Find the suggestion span and update its text and data attribute
-            //              const suggestionSpan = this.parentElement;
-            //              suggestionSpan.childNodes[0].nodeValue = newName.trim() + ' '; // Update text node
-            //              suggestionSpan.querySelector('.accept-suggestion').dataset.label = newName.trim();
-            //              suggestionSpan.querySelector('.edit-suggestion').dataset.label = newName.trim();
-            //              suggestionSpan.querySelector('.discard-suggestion').dataset.label = newName.trim();
-            //         }
-            //     });
-            // });
 
             suggestedLabelsDiv.querySelectorAll('.discard-suggestion').forEach(button => {
                 button.addEventListener('click', function() {
@@ -914,6 +993,7 @@
              bulkLabelingProgressBarContainer.classList.remove('hidden');
              bulkLabelingProgressBar.style.width = '0%';
              bulkLabelingProgressBar.innerText = '0%';
+             applyLabelsButton.disabled = true; // Disable button during processing
 
              let processedCount = 0;
 
@@ -923,11 +1003,16 @@
                      imgElement.src = imgObj.url;
                      await imgElement.decode(); // Ensure image is loaded
 
-                     const predictions = await model.classify(imgElement);
+                     // Resize image before classification
+                     const resizedBlob = await resizeImage(imgElement, IMAGE_SIZE_FOR_MODEL);
+                     const resizedImgElement = new Image();
+                     resizedImgElement.src = URL.createObjectURL(resizedBlob);
+                     await resizedImgElement.decode();
+
+                     const predictions = await model.classify(resizedImgElement);
 
                      // Simple mapping: if a predicted class name is an exact match
                      // to an available label, assign that label.
-                     // A more advanced version could use fuzzy matching or a user-defined mapping.
                      const assigned = [];
                      predictions.forEach(p => {
                          // Consider top few predictions, e.g., top 5
@@ -938,7 +1023,10 @@
 
                      // Update the imageLabels object and save to DB
                      imageLabels[imgObj.file.name] = assigned;
-                     saveImageLabelsToDB(imgObj.file.name, assigned);
+                     await saveImageLabelsToDB(imgObj.file.name, assigned);
+
+                     // Clean up the temporary URL
+                     URL.revokeObjectURL(resizedImgElement.src);
 
                  } catch (error) {
                      console.error('Error classifying image during bulk labeling:', imgObj.file.name, error);
@@ -952,6 +1040,7 @@
              }
 
              bulkLabelingStatus.innerText = 'Label application complete.';
+             bulkLabelingProgressBarContainer.classList.add('hidden'); // Hide progress bar
              // Re-render the gallery to show the newly applied labels
              renderGallery(activeFilters);
              updateButtonStates();
@@ -969,11 +1058,21 @@
         }
 
 
-        // --- Initial Setup ---
-        // Initial load of labels is handled in IndexedDB request.onsuccess
-        // Initial render of gallery happens after files are selected and labels loaded.
-        // Model loading starts on IndexedDB success.
-        updateButtonStates(); // Set initial state
+        // --- Initialization ---
+        async function initializeApp() {
+            try {
+                await openDatabase(); // Open DB first
+                await loadLabelsFromDB(); // Load labels from DB
+                // Image labels will be loaded when files are selected
+                await loadModel(); // Load the ML model
+            } catch (error) {
+                console.error("Failed to initialize app:", error);
+                suggestionStatus.innerText = 'App initialization failed.';
+                bulkLabelingStatus.innerText = 'App initialization failed.';
+            }
+        }
+
+        initializeApp(); // Start the application initialization
 
     </script>
 </body>
