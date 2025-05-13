@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Refactored Local Photo Labeler & Filter</title>
+    <title>Refined Local Photo Labeler & Filter</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/mobilenet"></script>
@@ -181,14 +181,6 @@
               cursor: pointer;
               margin-left: 5px;
          }
-         /* Edit suggestion functionality removed for simplicity in this iteration */
-         /* .suggested-label .edit-suggestion {
-              font-size: 1em;
-              font-weight: bold;
-              color: #f59e0b;
-              cursor: pointer;
-              margin-left: 5px;
-         } */
          .suggested-label .discard-suggestion {
               font-size: 1em;
               font-weight: bold;
@@ -291,7 +283,7 @@
 </head>
 <body>
     <div class="container">
-        <h1 class="text-3xl font-bold text-gray-800 mb-6">Refactored Local Photo Labeler & Filter</h1>
+        <h1 class="text-3xl font-bold text-gray-800 mb-6">Refined Local Photo Labeler & Filter</h1>
         <p class="text-gray-600 mb-6">Select photos from your computer to label and filter them locally. Labels and assignments are saved in your browser.</p>
 
         <input type="file" id="file-upload" accept="image/*" multiple>
@@ -384,9 +376,10 @@
 
         // --- Constants ---
         const DB_NAME = 'PhotoLabelerDB';
-        const DB_VERSION = 2; // Increment version for schema changes (added imageLabels store)
+        const DB_VERSION = 2;
         const SUBSET_SIZE = 20; // Number of images for label suggestion
         const IMAGE_SIZE_FOR_MODEL = 224; // Target size for images fed to MobileNet
+        const SUGGESTION_CONFIDENCE_THRESHOLD = 0.1; // Lower threshold for suggestions
 
         // --- IndexedDB Setup ---
         function openDatabase() {
@@ -421,7 +414,7 @@
 
         // --- IndexedDB Data Operations ---
         async function loadLabelsFromDB() {
-            if (!db) await openDatabase(); // Ensure DB is open
+            if (!db) await openDatabase();
             return new Promise((resolve, reject) => {
                 const transaction = db.transaction(['labels'], 'readonly');
                 const store = transaction.objectStore('labels');
@@ -432,7 +425,7 @@
                     console.log('Loaded labels from DB:', availableLabels);
                     renderAvailableLabels();
                     renderFilterLabels();
-                    renderModalLabels(); // Update modal labels based on loaded labels
+                    renderModalLabels();
                     updateButtonStates();
                     resolve();
                 };
@@ -445,11 +438,11 @@
         }
 
          async function saveLabelToDB(labelName) {
-             if (!db) await openDatabase(); // Ensure DB is open
+             if (!db) await openDatabase();
              return new Promise((resolve, reject) => {
                  const transaction = db.transaction(['labels'], 'readwrite');
                  const store = transaction.objectStore('labels');
-                 const request = store.put({ name: labelName }); // Use put for add/update
+                 const request = store.put({ name: labelName });
                  request.onsuccess = () => {
                      console.log(`Label "${labelName}" saved to DB`);
                      resolve();
@@ -462,7 +455,7 @@
          }
 
          async function removeLabelFromDB(labelName) {
-             if (!db) await openDatabase(); // Ensure DB is open
+             if (!db) await openDatabase();
              return new Promise((resolve, reject) => {
                  const transaction = db.transaction(['labels'], 'readwrite');
                  const store = transaction.objectStore('labels');
@@ -479,7 +472,7 @@
          }
 
         async function loadImageLabelsFromDB(fileNames) {
-            if (!db) await openDatabase(); // Ensure DB is open
+            if (!db) await openDatabase();
             const transaction = db.transaction(['imageLabels'], 'readonly');
             const store = transaction.objectStore('imageLabels');
             const requests = fileNames.map(fileName => store.get(fileName));
@@ -499,13 +492,12 @@
                     };
                     req.onerror = function(event) {
                         console.error('Error loading image label from DB:', event.target.error);
-                        loadedCount++; // Still count even on error
+                        loadedCount++;
                         if (loadedCount === requests.length) {
-                             resolve(); // Resolve even if some fail
+                             resolve();
                         }
                     };
                 });
-                 // Handle case with no files
                  if (fileNames.length === 0) {
                      resolve();
                  }
@@ -513,7 +505,7 @@
         }
 
          async function saveImageLabelsToDB(fileName, labels) {
-             if (!db) await openDatabase(); // Ensure DB is open
+             if (!db) await openDatabase();
              return new Promise((resolve, reject) => {
                  const transaction = db.transaction(['imageLabels'], 'readwrite');
                  const store = transaction.objectStore('imageLabels');
@@ -530,7 +522,7 @@
          }
 
         async function removeImageLabelFromDB(fileName) {
-             if (!db) await openDatabase(); // Ensure DB is open
+             if (!db) await openDatabase();
              return new Promise((resolve, reject) => {
                  const transaction = db.transaction(['imageLabels'], 'readwrite');
                  const store = transaction.objectStore('imageLabels');
@@ -554,7 +546,7 @@
                 console.log('MobileNet model loaded.');
                 suggestionStatus.innerText = 'Model ready. Select photos to suggest labels.';
                 bulkLabelingStatus.innerText = 'Model ready. Select photos and add labels to apply.';
-                 updateButtonStates(); // Enable buttons after model loads
+                 updateButtonStates();
             } catch (error) {
                 console.error('Error loading the MobileNet model:', error);
                 suggestionStatus.innerText = 'Error loading model.';
@@ -564,13 +556,18 @@
 
         // --- Image Processing (Downsizing) ---
         function resizeImage(imageElement, targetSize) {
-            return new Promise((resolve) => {
+            return new Promise((resolve, reject) => {
                 const canvas = document.createElement('canvas');
                 const context = canvas.getContext('2d');
 
                 // Calculate new dimensions while maintaining aspect ratio
                 let width = imageElement.width;
                 let height = imageElement.height;
+
+                if (width === 0 || height === 0) {
+                    reject("Image element has zero width or height.");
+                    return;
+                }
 
                 if (width > height) {
                     if (width > targetSize) {
@@ -592,7 +589,11 @@
 
                 // Convert canvas to a Blob
                 canvas.toBlob(blob => {
-                    resolve(blob);
+                    if (blob) {
+                       resolve(blob);
+                    } else {
+                       reject("Canvas toBlob failed.");
+                    }
                 }, 'image/jpeg', 0.8); // Use JPEG with 80% quality
             });
         }
@@ -607,16 +608,15 @@
                 span.innerHTML = `${label} <span class="remove-label" data-label="${label}">&times;</span>`;
                 availableLabelsDiv.appendChild(span);
             });
-             // Add event listeners for remove buttons
              availableLabelsDiv.querySelectorAll('.remove-label').forEach(button => {
                  button.addEventListener('click', function(event) {
-                     event.stopPropagation(); // Prevent label click
+                     event.stopPropagation();
                      const labelToRemove = this.dataset.label;
                      removeLabel(labelToRemove);
                  });
              });
              updateButtonStates();
-             renderModalLabels(); // Keep modal labels updated
+             renderModalLabels();
         }
 
         async function addLabel() {
@@ -634,11 +634,9 @@
 
         async function removeLabel(labelToRemove) {
             if (confirm(`Are you sure you want to remove the label "${labelToRemove}"? This will remove it from all photos.`)) {
-                // Remove from available labels
                 availableLabels = availableLabels.filter(label => label !== labelToRemove);
                 await removeLabelFromDB(labelToRemove);
 
-                // Remove from image labels and update DB
                 for (const fileName in imageLabels) {
                     const updatedLabels = imageLabels[fileName].filter(label => label !== labelToRemove);
                     if (updatedLabels.length === 0) {
@@ -652,8 +650,8 @@
 
                 renderAvailableLabels();
                 renderFilterLabels();
-                renderGallery(activeFilters); // Re-render gallery to reflect label removal
-                renderModalLabels(); // Update modal labels
+                renderGallery(activeFilters);
+                renderModalLabels();
                 updateButtonStates();
             }
         }
@@ -671,9 +669,8 @@
             galleryDiv.innerHTML = '';
             const filteredImages = images.filter(img => {
                 if (filter.length === 0) {
-                    return true; // Show all if no filters
+                    return true;
                 }
-                // Check if the image has ALL the active filter labels
                 const imageAssignedLabels = imageLabels[img.file.name] || [];
                 return filter.every(filterLabel => imageAssignedLabels.includes(filterLabel));
             });
@@ -709,7 +706,6 @@
                 item.appendChild(imgElement);
                 item.appendChild(infoDiv);
 
-                // Add click listener to open modal
                 item.addEventListener('click', () => openModal(img.file.name));
 
                 galleryDiv.appendChild(item);
@@ -724,43 +720,34 @@
 
             for (const file of files) {
                 if (file.type.startsWith('image/')) {
-                     // Check if an image with the same name is already loaded in the 'images' array
                      const existingImageIndex = images.findIndex(img => img.file.name === file.name);
 
                      if (existingImageIndex === -1) {
-                         // New image, create a new object
                          const newImage = {
                              file: file,
-                             url: URL.createObjectURL(file), // Create URL immediately
+                             url: URL.createObjectURL(file),
                          };
                          newImages.push(newImage);
-                         fileNamesToLoadLabelsFor.push(file.name); // Add to list to load labels
+                         fileNamesToLoadLabelsFor.push(file.name);
                      } else {
-                         // Image with this name already exists, update its URL if needed
-                         // (This might happen if user selects the same file again)
-                         // Revoke old URL to free memory
                          URL.revokeObjectURL(images[existingImageIndex].url);
                          images[existingImageIndex].url = URL.createObjectURL(file);
-                         // No need to add to fileNamesToLoadLabelsFor, labels are already in imageLabels object
                      }
                 }
             }
 
-
-            // Add new images to the main images array
             images = [...images, ...newImages];
             fileCountSpan.innerText = `${images.length} photos selected`;
 
-            // Load assigned labels for the newly added images from DB
             await loadImageLabelsFromDB(fileNamesToLoadLabelsFor);
 
-            renderGallery(activeFilters); // Initial render of the gallery
-            updateButtonStates(); // Update button states based on loaded photos
+            renderGallery(activeFilters);
+            updateButtonStates();
         });
 
 
         // --- Modal Functionality ---
-        let currentImageFileName = null; // File name of the image currently in the modal
+        let currentImageFileName = null;
 
         function openModal(fileName) {
             currentImageFileName = fileName;
@@ -772,27 +759,24 @@
             modalImage.alt = image.file.name;
             modalImageName.innerText = image.file.name;
 
-            renderModalLabels(imageLabels[fileName] || []); // Render labels in the modal, highlighting selected ones
+            renderModalLabels(imageLabels[fileName] || []);
             labelModal.classList.remove('hidden');
         }
 
         function closeModal() {
             labelModal.classList.add('hidden');
-            currentImageFileName = null; // Reset file name
-            renderGallery(activeFilters); // Re-render gallery to show updated labels
-            // Labels are saved to DB immediately when toggled in modal
+            currentImageFileName = null;
+            renderGallery(activeFilters);
         }
 
         closeModalButton.addEventListener('click', closeModal);
 
-        // Close modal if clicking outside the modal content
         labelModal.addEventListener('click', function(event) {
             if (event.target === labelModal) {
                 closeModal();
             }
         });
 
-        // Close modal with Escape key
         document.addEventListener('keydown', function(event) {
             if (event.key === 'Escape' && !labelModal.classList.contains('hidden')) {
                 closeModal();
@@ -818,7 +802,6 @@
 
         async function toggleLabelForCurrentImage(label) {
             if (currentImageFileName) {
-                // Ensure the image entry exists in imageLabels
                 if (!imageLabels[currentImageFileName]) {
                     imageLabels[currentImageFileName] = [];
                 }
@@ -827,15 +810,13 @@
                 const labelIndex = imageAssignedLabels.indexOf(label);
 
                 if (labelIndex === -1) {
-                    // Label not present, add it
                     imageAssignedLabels.push(label);
                 } else {
-                    // Label present, remove it
                     imageAssignedLabels.splice(labelIndex, 1);
                 }
 
-                renderModalLabels(imageAssignedLabels); // Re-render modal labels to show selection change
-                await saveImageLabelsToDB(currentImageFileName, imageAssignedLabels); // Save changes to DB immediately
+                renderModalLabels(imageAssignedLabels);
+                await saveImageLabelsToDB(currentImageFileName, imageAssignedLabels);
             }
         }
 
@@ -859,14 +840,12 @@
          function toggleFilter(label) {
              const filterIndex = activeFilters.indexOf(label);
              if (filterIndex === -1) {
-                 // Filter not active, add it
                  activeFilters.push(label);
              } else {
-                 // Filter active, remove it
                  activeFilters.splice(filterIndex, 1);
              }
-             renderFilterLabels(); // Update filter button appearance
-             renderGallery(activeFilters); // Re-render gallery with new filters
+             renderFilterLabels();
+             renderGallery(activeFilters);
          }
 
          clearFiltersButton.addEventListener('click', function() {
@@ -888,20 +867,17 @@
              }
 
              suggestionStatus.innerText = `Analyzing a random subset of ${Math.min(images.length, SUBSET_SIZE)} photos...`;
-             suggestedLabelsDiv.innerHTML = ''; // Clear previous suggestions
-             suggestLabelsButton.disabled = true; // Disable button during processing
+             suggestedLabelsDiv.innerHTML = '';
+             suggestLabelsButton.disabled = true;
 
-             // Select a random subset
              const subset = images.slice().sort(() => 0.5 - Math.random()).slice(0, Math.min(images.length, SUBSET_SIZE));
-
              const suggested = new Set();
 
              for (const imgObj of subset) {
                  try {
-                     // Create a temporary image element to classify
                      const imgElement = new Image();
                      imgElement.src = imgObj.url;
-                     await imgElement.decode(); // Ensure image is loaded
+                     await imgElement.decode();
 
                      // Resize image before classification
                      const resizedBlob = await resizeImage(imgElement, IMAGE_SIZE_FOR_MODEL);
@@ -909,13 +885,16 @@
                      resizedImgElement.src = URL.createObjectURL(resizedBlob);
                      await resizedImgElement.decode();
 
-                     const predictions = await model.classify(resizedImgElement);
+                     // Classify with a lower confidence threshold for suggestions
+                     const predictions = await model.classify(resizedImgElement, 5); // Get top 5 predictions
 
-                     // Add top 3 predicted class names as suggestions
-                     predictions.slice(0, 3).forEach(p => suggested.add(p.className));
+                     predictions.forEach(p => {
+                         if (p.probability > SUGGESTION_CONFIDENCE_THRESHOLD) {
+                             suggested.add(p.className);
+                         }
+                     });
 
-                     // Clean up the temporary URL
-                     URL.revokeObjectURL(resizedImgElement.src);
+                     URL.revokeObjectURL(resizedImgElement.src); // Clean up temporary URL
 
                  } catch (error) {
                      console.error('Error classifying image in subset:', imgObj.file.name, error);
@@ -923,9 +902,10 @@
                  }
              }
 
-             renderSuggestedLabels(Array.from(suggested));
-             suggestionStatus.innerText = `Found ${suggested.size} potential labels from a subset of ${subset.length} photos. Review and add them to your custom labels.`;
-             suggestLabelsButton.disabled = false; // Re-enable button
+             const uniqueSuggestions = Array.from(suggested);
+             renderSuggestedLabels(uniqueSuggestions);
+             suggestionStatus.innerText = `Found ${uniqueSuggestions.length} potential labels from a subset of ${subset.length} photos. Review and add them to your custom labels.`;
+             suggestLabelsButton.disabled = false;
         });
 
         function renderSuggestedLabels(suggestions) {
@@ -946,7 +926,6 @@
                 suggestedLabelsDiv.appendChild(span);
             });
 
-            // Add event listeners for suggestion actions
             suggestedLabelsDiv.querySelectorAll('.accept-suggestion').forEach(button => {
                 button.addEventListener('click', async function() {
                     const labelToAdd = this.dataset.label;
@@ -958,15 +937,13 @@
                         renderModalLabels();
                         updateButtonStates();
                     }
-                    // Remove the suggestion span
                     this.parentElement.remove();
-                     if(suggestedLabelsDiv.children.length === 0) suggestedLabelsDiv.innerHTML = 'No suggestions remaining.';
+                    if(suggestedLabelsDiv.children.length === 0) suggestedLabelsDiv.innerHTML = 'No suggestions remaining.';
                 });
             });
 
             suggestedLabelsDiv.querySelectorAll('.discard-suggestion').forEach(button => {
                 button.addEventListener('click', function() {
-                    // Remove the suggestion span
                     this.parentElement.remove();
                     if(suggestedLabelsDiv.children.length === 0) suggestedLabelsDiv.innerHTML = 'No suggestions remaining.';
                 });
@@ -993,7 +970,7 @@
              bulkLabelingProgressBarContainer.classList.remove('hidden');
              bulkLabelingProgressBar.style.width = '0%';
              bulkLabelingProgressBar.innerText = '0%';
-             applyLabelsButton.disabled = true; // Disable button during processing
+             applyLabelsButton.disabled = true;
 
              let processedCount = 0;
 
@@ -1001,7 +978,7 @@
                  try {
                      const imgElement = new Image();
                      imgElement.src = imgObj.url;
-                     await imgElement.decode(); // Ensure image is loaded
+                     await imgElement.decode();
 
                      // Resize image before classification
                      const resizedBlob = await resizeImage(imgElement, IMAGE_SIZE_FOR_MODEL);
@@ -1011,26 +988,21 @@
 
                      const predictions = await model.classify(resizedImgElement);
 
-                     // Simple mapping: if a predicted class name is an exact match
-                     // to an available label, assign that label.
                      const assigned = [];
                      predictions.forEach(p => {
-                         // Consider top few predictions, e.g., top 5
-                         if (availableLabels.includes(p.className) && !assigned.includes(p.className)) {
+                         // Assign label if it's in our available labels and has a reasonable confidence
+                         if (availableLabels.includes(p.className) && p.probability > 0.5 && !assigned.includes(p.className)) {
                              assigned.push(p.className);
                          }
                      });
 
-                     // Update the imageLabels object and save to DB
                      imageLabels[imgObj.file.name] = assigned;
                      await saveImageLabelsToDB(imgObj.file.name, assigned);
 
-                     // Clean up the temporary URL
                      URL.revokeObjectURL(resizedImgElement.src);
 
                  } catch (error) {
                      console.error('Error classifying image during bulk labeling:', imgObj.file.name, error);
-                     // Continue with the next image
                  } finally {
                      processedCount++;
                      const progress = Math.round((processedCount / images.length) * 100);
@@ -1040,8 +1012,7 @@
              }
 
              bulkLabelingStatus.innerText = 'Label application complete.';
-             bulkLabelingProgressBarContainer.classList.add('hidden'); // Hide progress bar
-             // Re-render the gallery to show the newly applied labels
+             bulkLabelingProgressBarContainer.classList.add('hidden');
              renderGallery(activeFilters);
              updateButtonStates();
         });
@@ -1061,10 +1032,9 @@
         // --- Initialization ---
         async function initializeApp() {
             try {
-                await openDatabase(); // Open DB first
-                await loadLabelsFromDB(); // Load labels from DB
-                // Image labels will be loaded when files are selected
-                await loadModel(); // Load the ML model
+                await openDatabase();
+                await loadLabelsFromDB();
+                await loadModel();
             } catch (error) {
                 console.error("Failed to initialize app:", error);
                 suggestionStatus.innerText = 'App initialization failed.';
@@ -1072,8 +1042,9 @@
             }
         }
 
-        initializeApp(); // Start the application initialization
+        initializeApp();
 
     </script>
 </body>
 </html>
+
